@@ -258,6 +258,13 @@
         Scan Next QR Code
       </button>
 
+<button id="returnToPortalButton"
+        class="primary hidden">
+
+  Return to Guest Check-in Portal
+
+</button>
+
     </section>
 
     <canvas id="canvas" class="hidden"></canvas>
@@ -298,7 +305,14 @@
 
     async function startCamera() {
 
-      if (starting || scanning) return;
+  if (
+    starting ||
+    scanning ||
+    qrTransferPending ||
+    qrTransferCompleted
+  ) {
+    return;
+  }
 
       if (typeof jsQR !== "function") {
 
@@ -568,40 +582,73 @@
     }
 
 
-    function handleResult(value) {
+   
+function handleResult(value) {
 
-      stopCamera();
+  stopCamera();
+
+  if (connectionRequested) {
+
+    if (!portalConnected) {
 
       setStatus(
-        "QR code detected successfully.",
-        "success"
+
+        "The Guest Check-in Portal is not " +
+        "connected. Please launch the scanner " +
+        "again from the original portal.",
+
+        "error"
+
       );
 
-      el("resultText").textContent =
-
-        value === "RGS-SCANNER-TEST"
-
-          ? "RGS scanner test passed."
-
-          : "QR code detected. " +
-            "Length: " + value.length +
-            " characters.";
-
-      show("resultPanel", true);
-
-      if (navigator.vibrate) {
-
-        navigator.vibrate(100);
-      }
-
-      el("resultPanel").scrollIntoView({
-
-        behavior: "smooth",
-
-        block: "start"
-
-      });
+      return;
     }
+
+    transferQRToPortal(value);
+
+    return;
+  }
+
+  // Standalone demonstration mode.
+
+  setStatus(
+
+    "QR code detected successfully.",
+
+    "success"
+
+  );
+
+  el("resultText").textContent =
+
+    value === "RGS-SCANNER-TEST"
+
+      ? "RGS scanner test passed."
+
+      : "QR code detected. " +
+        "Length: " + value.length +
+        " characters.";
+
+  show("resultPanel", true);
+
+  show("nextButton", true);
+
+  show("returnToPortalButton", false);
+
+  if (navigator.vibrate) {
+
+    navigator.vibrate(100);
+  }
+
+  el("resultPanel").scrollIntoView({
+
+    behavior: "smooth",
+
+    block: "start"
+
+  });
+}
+
 
 
 // ==========================================
@@ -626,7 +673,11 @@ const connectionRequested =
 let portalConnected = false;
 
 let connectionTimer = null;
+let qrTransferPending = false;
 
+let qrTransferTimer = null;
+
+let qrTransferCompleted = false;
 
 function setConnectionStatus(
   message,
@@ -676,6 +727,116 @@ function isAllowedPortalOrigin(origin) {
 }
 
 
+function transferQRToPortal(value) {
+
+  if (
+    !portalConnected ||
+    qrTransferPending ||
+    qrTransferCompleted
+  ) {
+    return;
+  }
+
+  const token = String(value || "").trim();
+
+  if (!/^[a-f0-9]{64}$/i.test(token)) {
+
+    setStatus(
+
+      "This is not a valid event admission QR code. " +
+      "Please scan the QR code from the guest's " +
+      "confirmation email.",
+
+      "error"
+
+    );
+
+    show("resultPanel", false);
+
+    return;
+  }
+
+  if (!window.opener || window.opener.closed) {
+
+    setStatus(
+
+      "The Guest Check-in Portal is no longer " +
+      "connected. Please return to the portal " +
+      "and launch a new scanner session.",
+
+      "error"
+
+    );
+
+    return;
+  }
+
+  qrTransferPending = true;
+
+  el("startButton").disabled = true;
+
+  setStatus(
+    "QR code detected. Transferring securely..."
+  );
+
+  clearTimeout(qrTransferTimer);
+
+  qrTransferTimer = setTimeout(() => {
+
+    qrTransferPending = false;
+
+    el("startButton").disabled = false;
+
+    setStatus(
+
+      "The portal did not acknowledge the QR " +
+      "transfer. Return to the portal and check " +
+      "whether the guest details are displayed.",
+
+      "error"
+
+    );
+
+    show("returnToPortalButton", true);
+
+    show("resultPanel", true);
+
+  }, 20000);
+
+  try {
+
+    window.opener.postMessage({
+
+      channel: "RGS_EVENT_SCANNER",
+
+      type: "QR_RESULT",
+
+      nonce: connectionNonce,
+
+      token: token
+
+    }, portalOrigin);
+
+  } catch (error) {
+
+    clearTimeout(qrTransferTimer);
+
+    qrTransferPending = false;
+
+    el("startButton").disabled = false;
+
+    setStatus(
+
+      "QR transfer failed. Please return " +
+      "to the portal and try again.",
+
+      "error"
+
+    );
+  }
+}
+
+    
 function sendPortalMessage(type) {
 
   if (!window.opener || window.opener.closed) {
@@ -773,6 +934,84 @@ window.addEventListener("message", event => {
 
     );
   }
+
+if (
+  message.type === "QR_RECEIVED" &&
+  portalConnected &&
+  qrTransferPending
+) {
+
+  clearTimeout(qrTransferTimer);
+
+  qrTransferPending = false;
+
+  qrTransferCompleted = true;
+
+  setStatus(
+
+    "QR code transferred successfully.",
+
+    "success"
+
+  );
+
+  el("resultText").textContent =
+
+    "The QR code has been received by the " +
+    "Guest Check-in Portal. Return to the " +
+    "portal to view the verification result.";
+
+  show("resultPanel", true);
+
+  show("nextButton", false);
+
+  show("startButton", false);
+
+  show("testConnectionButton", false);
+
+  show("returnToPortalButton", true);
+
+  el("resultPanel").scrollIntoView({
+
+    behavior: "smooth",
+
+    block: "start"
+
+  });
+}
+
+
+if (
+  message.type === "QR_REJECTED" &&
+  portalConnected &&
+  qrTransferPending
+) {
+
+  clearTimeout(qrTransferTimer);
+
+  qrTransferPending = false;
+
+  el("startButton").disabled = false;
+
+  setStatus(
+
+    "The portal could not accept this transfer. " +
+    "Return to the portal and launch a new scanner.",
+
+    "error"
+
+  );
+
+  el("resultText").textContent =
+
+    "Please check the original portal window.";
+
+  show("resultPanel", true);
+
+  show("nextButton", false);
+
+  show("returnToPortalButton", true);
+}
 
 });
 
@@ -886,6 +1125,33 @@ initialisePortalConnection();
 
 
     el("nextButton").onclick = startCamera;
+
+el("returnToPortalButton").onclick = () => {
+
+  stopCamera();
+
+  try {
+
+    if (window.opener && !window.opener.closed) {
+
+      window.opener.focus();
+    }
+
+  } catch (error) {
+
+    // Some browsers restrict window focus.
+  }
+
+  window.close();
+
+  setConnectionStatus(
+
+    "If this tab remains open, close it " +
+    "manually and return to the original " +
+    "Guest Check-in Portal."
+
+  );
+};
 
 
     window.addEventListener(
