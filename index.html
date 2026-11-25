@@ -604,6 +604,276 @@
     }
 
 
+// ==========================================
+// SECURE PORTAL CONNECTION
+// ==========================================
+
+const connectionParams =
+  new URLSearchParams(
+    window.location.hash.substring(1)
+  );
+
+const portalOrigin =
+  connectionParams.get("origin") || "";
+
+const connectionNonce =
+  connectionParams.get("nonce") || "";
+
+const connectionRequested =
+  connectionParams.has("origin") ||
+  connectionParams.has("nonce");
+
+let portalConnected = false;
+
+let connectionTimer = null;
+
+
+function setConnectionStatus(
+  message,
+  type = "info"
+) {
+
+  const status = el("connectionStatus");
+
+  status.textContent = message;
+
+  status.className = "status " + type;
+}
+
+
+function isAllowedPortalOrigin(origin) {
+
+  try {
+
+    const url = new URL(origin);
+
+    if (url.protocol !== "https:") {
+      return false;
+    }
+
+    if (url.origin !== origin) {
+      return false;
+    }
+
+    const host = url.hostname;
+
+    return (
+
+      host === "script.google.com" ||
+
+      host === "script.googleusercontent.com" ||
+
+      host.endsWith(
+        "-script.googleusercontent.com"
+      )
+
+    );
+
+  } catch (error) {
+
+    return false;
+  }
+}
+
+
+function sendPortalMessage(type) {
+
+  if (!window.opener || window.opener.closed) {
+
+    setConnectionStatus(
+
+      "The connection to the Guest Check-in " +
+      "Portal is unavailable.",
+
+      "error"
+
+    );
+
+    return false;
+  }
+
+  try {
+
+    window.opener.postMessage({
+
+      channel: "RGS_EVENT_SCANNER",
+
+      type: type,
+
+      nonce: connectionNonce
+
+    }, portalOrigin);
+
+    return true;
+
+  } catch (error) {
+
+    setConnectionStatus(
+
+      "Communication failed: " + error.message,
+
+      "error"
+
+    );
+
+    return false;
+  }
+}
+
+
+window.addEventListener("message", event => {
+
+  if (!connectionRequested) return;
+
+  if (event.origin !== portalOrigin) return;
+
+  if (event.source !== window.opener) return;
+
+  const message = event.data;
+
+  if (!message || typeof message !== "object") {
+    return;
+  }
+
+  if (message.channel !== "RGS_EVENT_SCANNER") {
+    return;
+  }
+
+  if (message.nonce !== connectionNonce) {
+    return;
+  }
+
+  if (message.type === "PORTAL_ACK") {
+
+    clearTimeout(connectionTimer);
+
+    portalConnected = true;
+
+    setConnectionStatus(
+
+      "Connected to Guest Check-in Portal.",
+
+      "success"
+
+    );
+
+    show("testConnectionButton", true);
+  }
+
+  if (
+    message.type === "TEST_ACK" &&
+    portalConnected
+  ) {
+
+    setConnectionStatus(
+
+      "Two-way communication test passed.",
+
+      "success"
+
+    );
+  }
+
+});
+
+
+function initialisePortalConnection() {
+
+  if (!connectionRequested) {
+    return;
+  }
+
+  show("connectionPanel", true);
+
+  // Remove connection parameters from the
+  // visible address after reading them.
+
+  history.replaceState(
+
+    null,
+
+    "",
+
+    window.location.pathname +
+    window.location.search
+
+  );
+
+  if (!isAllowedPortalOrigin(portalOrigin)) {
+
+    setConnectionStatus(
+
+      "Invalid portal origin.",
+
+      "error"
+
+    );
+
+    return;
+  }
+
+  if (!/^[a-f0-9]{64}$/.test(connectionNonce)) {
+
+    setConnectionStatus(
+
+      "Invalid connection identifier.",
+
+      "error"
+
+    );
+
+    return;
+  }
+
+  if (!window.opener) {
+
+    setConnectionStatus(
+
+      "The browser has blocked the connection " +
+      "to the original portal window.",
+
+      "error"
+
+    );
+
+    return;
+  }
+
+  connectionTimer = setTimeout(() => {
+
+    if (!portalConnected) {
+
+      setConnectionStatus(
+
+        "Portal connection timed out. " +
+        "Return to the Guest Check-in Portal " +
+        "and try again.",
+
+        "error"
+
+      );
+    }
+
+  }, 15000);
+
+  sendPortalMessage("SCANNER_READY");
+}
+
+
+el("testConnectionButton").onclick = () => {
+
+  if (!portalConnected) return;
+
+  setConnectionStatus(
+    "Testing two-way communication..."
+  );
+
+  sendPortalMessage("TEST_MESSAGE");
+};
+
+
+initialisePortalConnection();
+
     el("startButton").onclick = startCamera;
 
 
